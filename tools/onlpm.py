@@ -69,10 +69,17 @@ class OnlPackageServiceScript(object):
 
 class OnlPackageAfterInstallScript(OnlPackageServiceScript):
     SCRIPT = """#!/bin/sh
-set -e
 if [ -x "/etc/init.d/%(service)s" ]; then
-	update-rc.d %(service)s defaults >/dev/null
-	invoke-rc.d %(service)s start || exit $?
+    if [ -x "/usr/sbin/policy-rc.d" ]; then
+        /usr/sbin/policy-rc.d
+        if [ $? -eq 101 ]; then
+            echo "warning: service %(service)s: postinst: ignored due to policy-rc.d"
+            exit 0;
+        fi
+    fi
+    set -e
+    update-rc.d %(service)s defaults >/dev/null
+    invoke-rc.d %(service)s start || exit $?
 fi
 """
 
@@ -80,7 +87,7 @@ class OnlPackageBeforeRemoveScript(OnlPackageServiceScript):
     SCRIPT = """#!/bin/sh
 set -e
 if [ -x "/etc/init.d/%(service)s" ]; then
-	invoke-rc.d %(service)s stop || exit $?
+    invoke-rc.d %(service)s stop || exit $?
 fi
 """
 
@@ -88,7 +95,7 @@ class OnlPackageAfterRemoveScript(OnlPackageServiceScript):
     SCRIPT = """#!/bin/sh
 set -e
 if [ "$1" = "purge" ] ; then
-	update-rc.d %(service)s remove >/dev/null
+    update-rc.d %(service)s remove >/dev/null
 fi
 """
 
@@ -274,7 +281,7 @@ class OnlPackage(object):
         return True
 
     @staticmethod
-    def copyf(src, dst, root):
+    def copyf(src, dst, root, symlinks=False):
         if dst.startswith('/'):
             dst = dst[1:]
 
@@ -284,7 +291,7 @@ class OnlPackage(object):
             #
             dstpath = os.path.join(root, dst)
             logger.debug("Copytree %s -> %s" % (src, dstpath))
-            shutil.copytree(src, dstpath)
+            shutil.copytree(src, dstpath, symlinks=symlinks)
         else:
             #
             # If the destination ends in a '/' it means copy the filename
@@ -346,7 +353,7 @@ class OnlPackage(object):
         self.pkg['__workdir'] = workdir
 
         for (src,dst) in self.pkg.get('files', {}):
-            OnlPackage.copyf(src, dst, root)
+            OnlPackage.copyf(src, dst, root, symlinks=self.pkg.get('symlinks', False))
 
         for (src,dst) in self.pkg.get('optional-files', {}):
             if os.path.exists(src):
@@ -431,7 +438,7 @@ class OnlPackage(object):
             if self.pkg.get('init-after-remove', True):
                 command = command + "--after-remove %s " % OnlPackageAfterRemoveScript(self.pkg['init'], dir=workdir).name
 
-        if self.pkg.get('asr', True):
+        if self.pkg.get('asr', False):
             with onlu.Profiler() as profiler:
                 # Generate the ASR documentation for this package.
                 sys.path.append("%s/sm/infra/tools" % os.getenv('ONL'))
